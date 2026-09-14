@@ -1,3 +1,29 @@
+# Edge & OneDrive Annoyance Reduction
+
+A safe, transparent PowerShell utility to permanently remove OneDrive persistence mechanisms, disable automated re-install triggers, and reclaim local user profile control.
+
+## What This Script Does
+
+1. **Pre-Flight Safety Check:** Audits Windows Known Folder Redirection (`User Shell Folders`) to prevent data loss if your Desktop, Documents, or Pictures are mapped to OneDrive.
+2. **Kills Active Processes:** Terminates lingering background sync engines.
+3. **Removes Scheduled Tasks:** Unregisters hidden OneDrive update tasks from Task Scheduler.
+4. **Enforces GPO Hard-Stop:** Sets `DisableFileSyncNGSC = 1` under `HKLM\SOFTWARE\Policies\Microsoft\Windows\OneDrive` so Windows will not auto-deploy OneDrive in the background.
+5. **Purges Active Setup Hooks:** Cleans out legacy registry keys that trigger silent re-installs on user login.
+6. **Cleans Explorer Sidebar:** Hides orphaned OneDrive cloud icons from the File Explorer navigation pane.
+
+## Usage
+
+1. Open PowerShell with elevated privileges (**Run as Administrator**).
+2. Clone or download `Remove-OneDrivePersistence.ps1`.
+3. If script execution is restricted, temporarily permit it for the process:
+   ```powershell
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+
+
+
+
+
 Video Tutorial Outline
 Title: How to Permanently Kill OneDrive (Without Breaking Your PC & Losing Files)
 
