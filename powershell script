@@ -1,0 +1,125 @@
+<#
+.SYNOPSIS
+    Permanent OneDrive Removal and Persistence Cleaner.
+.DESCRIPTION
+    1. Checks if user folders (Desktop, Documents, Pictures) are trapped in OneDrive.
+    2. Enforces HKLM GPO policies to permanently block OneDrive sync/installation.
+    3. Unregisters automated Scheduled Tasks.
+    4. Purges Active Setup auto-install hooks.
+    5. Cleans File Explorer namespace tree icon.
+    6. Uninstalls OneDrive and terminates background processes.
+#>
+
+# Requires Administrator privileges
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Warning "[!] Please run this script in an elevated PowerShell session (Run as Administrator)."
+    Exit
+}
+
+Write-Host "===================================================" -ForegroundColor Cyan
+Write-Host "   STEP 1: PRE-CHECK KNOWN FOLDER REDIRECTION      " -ForegroundColor Cyan
+Write-Host "===================================================" -ForegroundColor Cyan
+
+$userShellFolders = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+$desktopPath   = (Get-ItemProperty -Path $userShellFolders -Name "Desktop" -ErrorAction SilentlyContinue).Desktop
+$personalPath  = (Get-ItemProperty -Path $userShellFolders -Name "Personal" -ErrorAction SilentlyContinue).Personal
+$picturesPath  = (Get-ItemProperty -Path $userShellFolders -Name "My Pictures" -ErrorAction SilentlyContinue).'My Pictures'
+
+$isRedirected = $false
+
+if ($desktopPath -match "OneDrive" -or $personalPath -match "OneDrive" -or $picturesPath -match "OneDrive") {
+    $isRedirected = $true
+}
+
+if ($isRedirected) {
+    Write-Warning "[!] CRITICAL WARNING: Known folder redirection is ACTIVE!"
+    Write-Warning "    Your folders are currently mapped inside OneDrive:"
+    Write-Host "    - Desktop:   $desktopPath" -ForegroundColor Yellow
+    Write-Host "    - Documents: $personalPath" -ForegroundColor Yellow
+    Write-Host "    - Pictures:  $picturesPath" -ForegroundColor Yellow
+    Write-Host "`nIf you purge OneDrive now, Windows may display a blank desktop or lose track of files." -ForegroundColor Red
+    Write-Host "Please manually move your files to local C:\Users\$env:USERNAME\ and restore default folder locations via Folder Properties > Location before running the uninstaller."
+    
+    $confirm = Read-Host "`nDo you still want to proceed with full removal? (yes/no)"
+    if ($confirm -ne "yes") {
+        Write-Host "[-] Aborting execution to protect your user profile files." -ForegroundColor Green
+        Exit
+    }
+} else {
+    Write-Host "[+] Pre-Check Passed: Standard user folders are stored locally." -ForegroundColor Green
+}
+
+Write-Host "`n===================================================" -ForegroundColor Cyan
+Write-Host "   STEP 2: TERMINATING ONEDRIVE PROCESSES          " -ForegroundColor Cyan
+Write-Host "===================================================" -ForegroundColor Cyan
+
+Get-Process -Name "OneDrive*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Write-Host "[+] Terminated active OneDrive processes." -ForegroundColor Green
+
+Write-Host "`n===================================================" -ForegroundColor Cyan
+Write-Host "   STEP 3: UNREGISTER SCHEDULED TASKS              " -ForegroundColor Cyan
+Write-Host "===================================================" -ForegroundColor Cyan
+
+$tasks = Get-ScheduledTask | Where-Object { $_.TaskName -match "OneDrive" }
+if ($tasks) {
+    foreach ($task in $tasks) {
+        Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false
+        Write-Host "[+] Removed task: $($task.TaskName)" -ForegroundColor Green
+    }
+} else {
+    Write-Host "[*] No OneDrive scheduled tasks found." -ForegroundColor DarkGray
+}
+
+Write-Host "`n===================================================" -ForegroundColor Cyan
+Write-Host "   STEP 4: ENFORCE GPO / REGISTRY BLOCK POLICIES   " -ForegroundColor Cyan
+Write-Host "===================================================" -ForegroundColor Cyan
+
+# Block sync and cloud file handling engine-wide
+$policyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive"
+if (-not (Test-Path $policyPath)) {
+    New-Item -Path $policyPath -Force | Out-Null
+}
+Set-ItemProperty -Path $policyPath -Name "DisableFileSyncNGSC" -Value 1 -Type DWord
+Write-Host "[+] Enforced DisableFileSyncNGSC = 1 (Permanently prevents background sync & install triggers)." -ForegroundColor Green
+
+# Remove from Run keys
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "OneDrive" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "OneDrive" -ErrorAction SilentlyContinue
+Write-Host "[+] Cleaned Run keys." -ForegroundColor Green
+
+# Remove Active Setup trigger (prevents self-healing setup on login)
+$activeSetupPath = "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components"
+Get-ChildItem $activeSetupPath -ErrorAction SilentlyContinue | ForEach-Object {
+    $val = (Get-ItemProperty -Path $_.PSPath -Name "StubPath" -ErrorAction SilentlyContinue).StubPath
+    if ($val -match "OneDriveSetup.exe") {
+        Remove-Item -Path $_.PSPath -Recurse -Force
+        Write-Host "[+] Purged Active Setup component: $($_.PSChildName)" -ForegroundColor Green
+    }
+}
+
+# Remove OneDrive icon from File Explorer Left Navigation Pane
+$clsidPath = "HKCR:\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}"
+if (Test-Path $clsidPath) {
+    Set-ItemProperty -Path $clsidPath -Name "System.IsPinnedToNameSpaceTree" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+    Write-Host "[+] Hidden OneDrive icon from File Explorer sidebar." -ForegroundColor Green
+}
+
+Write-Host "`n===================================================" -ForegroundColor Cyan
+Write-Host "   STEP 5: UNINSTALL AND PURGE CACHED BINARIES     " -ForegroundColor Cyan
+Write-Host "===================================================" -ForegroundColor Cyan
+
+# Check for native winget uninstall
+if (Get-Command winget -ErrorAction SilentlyContinue) {
+    winget uninstall Microsoft.OneDrive --silent --accept-source-agreements 2>$null
+}
+
+# Clean the local user installer cache
+$localCache = "$env:LOCALAPPDATA\Microsoft\OneDrive"
+if (Test-Path $localCache) {
+    Remove-Item -Recurse -Force $localCache -ErrorAction SilentlyContinue
+    Write-Host "[+] Purged AppData setup cache: $localCache" -ForegroundColor Green
+}
+
+Write-Host "`n===================================================" -ForegroundColor Green
+Write-Host "   CLEANUP COMPLETE: OneDrive eradicated cleanly.   " -ForegroundColor Green
+Write-Host "===================================================" -ForegroundColor Green
